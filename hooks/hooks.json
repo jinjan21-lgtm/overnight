@@ -1,5 +1,5 @@
 {
-  "description": "overnight guard: .overnight/deadline 이 미래인 동안 Stop 차단, AskUserQuestion 거부, stdin 대기 명령 차단",
+  "description": "overnight guard: .overnight/deadline 을 쓴 세션에 한해, 마감 전 Stop 차단, AskUserQuestion 거부, stdin 대기 명령 차단",
   "hooks": {
     "Stop": [
       {
@@ -14,6 +14,17 @@
     "PreToolUse": [
       {
         "matcher": "AskUserQuestion|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/overnight/hooks/guard.js\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Write",
         "hooks": [
           {
             "type": "command",

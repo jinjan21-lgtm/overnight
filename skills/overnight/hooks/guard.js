@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// overnight guard — Stop / PreToolUse(AskUserQuestion) hook.
-// Active only while <cwd>/.overnight/deadline holds a future ISO time.
-// No deadline file, unreadable, or past deadline -> does nothing.
+// overnight guard — Stop / PreToolUse(AskUserQuestion|Bash) / PostToolUse(Bash|Write) hook.
+// Active only while .overnight/deadline (nearest one from cwd upward) holds a future ISO time,
+// and only for the session that owns it (.overnight/owner = session_id).
+// No deadline file, unreadable, past deadline, or another session's run -> does nothing.
 const fs = require('fs');
 const path = require('path');
 
@@ -11,15 +12,37 @@ process.stdin.on('end', () => {
   let input = {};
   try { input = JSON.parse(raw); } catch { process.exit(0); }
 
-  const cwd = input.cwd || process.cwd();
+  // The run lives in the nearest .overnight/ from cwd upward, so cd into a subfolder keeps it.
+  let cwd = input.cwd || process.cwd();
+  for (let d = path.resolve(cwd); ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, '.overnight', 'deadline'))) { cwd = d; break; }
+    if (path.dirname(d) === d) process.exit(0);
+  }
   let deadline;
   try {
     deadline = new Date(fs.readFileSync(path.join(cwd, '.overnight', 'deadline'), 'utf8').trim());
   } catch { process.exit(0); }
   if (isNaN(deadline)) process.exit(0);
 
-  const leftMin = Math.round((deadline - Date.now()) / 60000);
-  if (leftMin <= 0) process.exit(0);
+  if (deadline - Date.now() <= 0) process.exit(0);
+  const leftMin = Math.ceil((deadline - Date.now()) / 60000);
+
+  // Ownership: the session that writes .overnight/deadline owns the run. Any other session
+  // in the same folder (a second overnight, or the user peeking in) is left alone.
+  const ownerFile = path.join(cwd, '.overnight', 'owner');
+  const me = input.session_id || '';
+  const ti = input.tool_input || {};
+  // Only a write counts (Write tool, or a shell redirect/tee into the file) — reading it must not steal the run.
+  const wroteDeadline = /\.overnight[\\/]+deadline$/.test(String(ti.file_path || '')) ||
+    /(>|\btee\b)[^|;&]*\.overnight[\\/]+deadline/.test(String(ti.command || ''));
+  let owner = '';
+  try { owner = fs.readFileSync(ownerFile, 'utf8').trim(); } catch {}
+  if (input.hook_event_name === 'PostToolUse') {
+    if (me && wroteDeadline) fs.writeFileSync(ownerFile, me + '\n');
+    process.exit(0);
+  }
+  if (!owner && me) { fs.writeFileSync(ownerFile, me + '\n'); owner = me; } // deadline written by hand
+  if (owner && me && owner !== me) process.exit(0);
 
   // Early exit before the deadline is allowed only when the files show the loop really ran dry:
   //  - .overnight/EXHAUSTED has lines "1." .. "5." (12+ chars), none resting on a deferral

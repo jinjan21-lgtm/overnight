@@ -18,10 +18,14 @@ user-invocable: true
 
 ## 시작
 
-`.overnight/deadline`이 이미 있으면 **이어받기**: deadline·LOG.md·DECISIONS.md를 읽고 마지막 항목부터 계속한다.
+가드 훅은 `.overnight/deadline`을 **쓴 세션**만 잠근다(`.overnight/owner`에 기록). 같은 폴더의 다른 세션은 건드리지 않는다.
 
-없으면 (첫 3분):
-1. 마감 계산 → `.overnight/deadline`에 ISO 시각 한 줄. 기준은 사용자 메시지를 받은 시각.
+`.overnight/deadline`이 이미 있고 마감 전이면 `.overnight/LOG.md` 수정 시각부터 본다:
+- **20분 안에 수정됨 → 다른 세션이 지금 밤샘 중.** 이 폴더에서 일하지 않는다. `git worktree add .overnight-wt/<n> -b overnight/<시작일>-<n>`(`.overnight-wt/`는 `.git/info/exclude`에), 그 폴더로 `cd`해서 아래 "새로 시작"을 한다. `docs/REMAINING.md`에서 다른 세션이 잡은 항목(LOG 최근 줄)은 집지 않는다. 다른 세션의 브랜치로 rebase·merge하지 않는다 — 두 브랜치 합치기는 `아침에 할 일`로.
+- **오래됨 → 이어받기.** 앞 세션이 죽은 것이다. deadline 값을 그대로 다시 써서(`echo <같은 값> > .overnight/deadline`) 잠금을 넘겨받고, LOG.md·DECISIONS.md를 읽고 마지막 항목부터 계속한다.
+
+마감이 지났거나 없으면 **새로 시작** (첫 3분):
+1. 마감 계산 → `.overnight/deadline`에 ISO 시각 한 줄(`echo` 리다이렉트나 Write 도구로 — 이 쓰기가 잠금을 이 세션에 건다). 기준은 사용자 메시지를 받은 시각.
    - "N시간" → 받은 시각 + N시간
    - "아침까지" → 다음 날 08:00
    - 명시 없음 → + 8시간
@@ -97,7 +101,7 @@ PLAN·REMAINING이 없는 프로젝트면 첫 재기획 때 골에서 출발해 
 
 ## 잠금 (guard 훅)
 
-`hooks/guard.js`가 Stop·PreToolUse 훅으로 설치돼 있으면 `.overnight/deadline`이 미래인 동안 **Stop을 막고, AskUserQuestion을 거부하고, stdin을 기다리며 멈출 Bash 명령(`python -` 등)을 거부**한다. 훅이 "멈추지 마라"를 되돌려 보내면 루프의 다음 단계를 잡는다. 훅이 없어도 규칙은 같다 — 훅은 안전망일 뿐이다.
+`hooks/guard.js`가 Stop·PreToolUse·PostToolUse 훅으로 설치돼 있으면, 잠금 주인 세션에 한해 `.overnight/deadline`이 미래인 동안 **Stop을 막고, AskUserQuestion을 거부하고, stdin을 기다리며 멈출 Bash 명령(`python -` 등)을 거부**한다. 훅이 "멈추지 마라"를 되돌려 보내면 루프의 다음 단계를 잡는다. 훅이 없어도 규칙은 같다 — 훅은 안전망일 뿐이다.
 
 `.overnight/deadline`은 지우거나 당기지 않는다. 출구는 `.overnight/EXHAUSTED` 하나다. 아래 5줄을 각각 근거와 함께 적어야 훅이 마감 전 멈춤을 허용한다.
 ```
