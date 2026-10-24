@@ -1,0 +1,15 @@
+{
+  "name": "overnight",
+  "owner": { "name": "jinjan21" },
+  "metadata": { "description": "밤샘 무인 실행용 스킬.", "version": "1.0.0" },
+  "plugins": [
+    {
+      "name": "overnight",
+      "description": "\"밤새 돌려\", \"자고 올게\" 같은 오더에 발동. 마감 전에는 사용자를 기다리지 않고 스스로 결정해 기록하며, 되돌릴 수 없는 행위만 아침으로 미룬다. Stop 가드 훅이 마감 전 멈춤과 질문을 막는다.",
+      "version": "1.0.0",
+      "author": { "name": "jinjan21" },
+      "source": "./",
+      "homepage": "https://github.com/jinjan21-lgtm/overnight"
+    }
+  ]
+}

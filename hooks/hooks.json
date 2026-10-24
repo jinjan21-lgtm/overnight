@@ -1,0 +1,11 @@
+{
+  "description": "overnight guard: .overnight/deadline 이 미래인 동안 Stop 차단, AskUserQuestion 거부",
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/overnight/hooks/guard.js\"" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "AskUserQuestion", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/overnight/hooks/guard.js\"" } ] }
+    ]
+  }
+}
