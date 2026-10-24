@@ -26,14 +26,15 @@ Claude Code 스킬 + Stop 가드 훅. "밤새 돌려", "10시간 돌려, 자고 
 **스킬 (규칙)**
 - 시작: `.overnight/deadline`에 마감 시각, `overnight/<날짜>` 브랜치, 질문 없이 착수
 - 결정 포인트: 되돌릴 수 있으면 고르고 `.overnight/DECISIONS.md`에 근거와 바꾸는 법을 남긴다. 되돌릴 수 없으면(삭제, push, 결제, 공유 리소스) 대안으로 진행하고 실제 행위는 `아침에 할 일`로
-- 일찍 끝나면 사다리: ① 방금 한 일 강화 ② REMAINING·TODO ③ 린트·타입·죽은 코드 ④ 문서·리뷰
+- 작업 루프: REMAINING에서 줍기 → 만들기 → 커밋 → WORKLOG/REMAINING 기록 → 비면 PLAN 목표를 다시 읽고 재기획 → 다시 줍기 (session-handoff 문서와 그대로 연계)
 - 한 항목 = 한 커밋 (`[goal]` / `[overnight]`). 아침에 `git revert`로 골라 버리면 된다
 - 막히면 30분 뒤 WIP 브랜치에 보존하고 다음 항목으로
 - 진행 보고는 채팅이 아니라 `.overnight/LOG.md`. 채팅은 마감 때 아침 보고 한 번
 
 **guard 훅 (잠금)**
 - `.overnight/deadline`이 미래인 동안 Stop을 막고 AskUserQuestion을 거부한다
-- 출구는 하나: `.overnight/EXHAUSTED`에 사다리 4단계 각각의 근거를 적었을 때만 마감 전 종료 허용 (공회전 방지)
+- 출구는 하나: `.overnight/EXHAUSTED` + 파일 흔적 검사 (재기획 3회 이상, 마지막 후보 5개 이상, 제외 사유는 비목표·비가역뿐, REMAINING 열린 항목 0). 공회전과 조기 종료를 둘 다 막는다
+- `python -`처럼 stdin을 기다리며 멈출 Bash 명령을 거부한다
 - deadline 파일이 없으면 아무것도 안 한다. 평소 세션에는 영향 없음
 
 아침 보고 예:
@@ -65,7 +66,7 @@ Claude Code 스킬 + Stop 가드 훅. "밤새 돌려", "10시간 돌려, 자고 
 {
   "hooks": {
     "Stop": [{ "hooks": [{ "type": "command", "command": "node \"<경로>/skills/overnight/hooks/guard.js\"" }] }],
-    "PreToolUse": [{ "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node \"<경로>/skills/overnight/hooks/guard.js\"" }] }]
+    "PreToolUse": [{ "matcher": "AskUserQuestion|Bash", "hooks": [{ "type": "command", "command": "node \"<경로>/skills/overnight/hooks/guard.js\"" }] }]
   }
 }
 ```
@@ -83,6 +84,7 @@ writing-skills의 RED → GREEN → REFACTOR, 그리고 `claude -p` 실전 실�
 | 실전 1 (훅만) | Stop 22회 차단, 마감까지 유지. 단 할 일이 없을 때 공회전 발견 |
 | 실전 2 (출구 추가) | 7턴 만에 EXHAUSTED 쓰고 정상 종료 |
 | 실전 3 (스킬+훅, 백로그 3개) | 골 + 백로그 3개 전부 처리, 결정 3건 기록, 커밋 4개 |
+| 실전 4~8 (기획·개발 반복, 인수인계 연계, 25분 × 5회) | 재기획 없음 → 5회, 커밋 6 → 20. 모델 판단 출구는 매번 다른 합리화로 뚫려서, 출구를 파일 흔적(재기획 회차·후보·제외 사유·REMAINING 체크)으로만 열도록 바꿈 |
 
 전체 기록: [skills/overnight/tests/tdd-record.md](skills/overnight/tests/tdd-record.md)
 
