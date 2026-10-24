@@ -21,7 +21,7 @@ user-invocable: true
 가드 훅은 `.overnight/deadline`을 **쓴 세션**만 잠근다(`.overnight/owner`에 기록). 같은 폴더의 다른 세션은 건드리지 않는다.
 
 `.overnight/deadline`이 이미 있고 마감 전이면 `.overnight/LOG.md` 수정 시각부터 본다:
-- **20분 안에 수정됨 → 다른 세션이 지금 밤샘 중.** 이 폴더에서 일하지 않는다. `git worktree add .overnight-wt/<n> -b overnight/<시작일>-<n>`(`.overnight-wt/`는 `.git/info/exclude`에), 그 폴더로 `cd`해서 아래 "새로 시작"을 한다. `docs/REMAINING.md`에서 다른 세션이 잡은 항목(LOG 최근 줄)은 집지 않는다. 다른 세션의 브랜치로 rebase·merge하지 않는다 — 두 브랜치 합치기는 `아침에 할 일`로.
+- **20분 안에 수정됨 → 다른 세션이 지금 밤샘 중.** 이 폴더에서 일하지 않는다. `git worktree add .overnight-wt/<n> -b overnight/<시작일>-<n>`(`.overnight-wt/`는 `.git/info/exclude`에), 그 폴더로 `cd`해서 아래 "새로 시작"을 한다(훅이 worktree에 앞 세션 마감을 기본값으로 깔아 두지만, 내 마감을 다시 써야 한다). 다른 세션의 브랜치로 rebase·merge하지 않는다 — 두 브랜치 합치기는 `아침에 할 일`로.
 - **오래됨 → 이어받기.** 앞 세션이 죽은 것이다. deadline 값을 그대로 다시 써서(`echo <같은 값> > .overnight/deadline`) 잠금을 넘겨받고, LOG.md·DECISIONS.md를 읽고 마지막 항목부터 계속한다.
 
 마감이 지났거나 없으면 **새로 시작** (첫 3분):
@@ -64,7 +64,7 @@ DECISIONS.md 한 항목:
 밤샘 작업은 대개 기획 → 개발 → 재기획 → 개발의 반복이다. 할 일 큐는 `docs/REMAINING.md`(session-handoff 형식)다. 없으면 만든다.
 
 ```
-┌→ 1. 줍기     REMAINING에서 되돌릴 수 있는 항목 하나. 작은 것부터
+┌→ 1. 줍기     REMAINING에서 되돌릴 수 있는 항목 하나. 작은 것부터. 찜 장부 확인 후 한 줄 적기(아래)
 │  2. 만들기   테스트와 함께. 외부 서비스가 필요하면 어댑터+mock까지
 │  3. 커밋     한 항목 한 커밋
 │  4. 기록     즉시 WORKLOG 항목 추가 + REMAINING 체크 (PLAN이 바뀌었으면 변경이력)
@@ -73,6 +73,14 @@ DECISIONS.md 한 항목:
 │             채택한 것을 REMAINING에 추가, PLAN 변경이력에 한 줄
 └─────────── 1로
 ```
+
+**찜 장부** — 같은 저장소에서 밤샘이 둘 이상 돌면 각자 REMAINING 사본만 보고 같은 기능을 두 번 만든다. guard 훅이 커밋마다 저장소 본 폴더 `.overnight/CLAIMS.md`에 `브랜치 | 커밋 제목`을 적고, 다른 세션 항목이 있으면 커밋 직후 알려 준다. 줍기 전에 한 번 더 확인하고, 잡은 항목을 먼저 적어 두면 겹침이 더 줄어든다:
+```
+C="$(git rev-parse --path-format=absolute --git-common-dir)/../.overnight/CLAIMS.md"
+cat "$C" 2>/dev/null                                     # 다른 브랜치가 잡은 기능이면(표현이 달라도) 건너뛴다
+echo "$(git branch --show-current) | <항목>" >> "$C"
+```
+건너뛴 항목은 내 REMAINING에 `[x] (다른 세션: <브랜치>)`로 체크한다.
 
 **PLAN의 기능 목록을 다 만들었다고 끝이 아니다.** 목표 문장을 다시 읽고 "목표에 더 다가가려면 다음엔 무엇이 필요한가"로 다음 항목을 만든다(사용성, 엣지 케이스, 성능, 문서, 테스트 공백, 다음 버전 기능 포함). 제외 기준은 둘뿐이다: **PLAN 비목표에 적혀 있다 / 되돌릴 수 없다.** "범위 확장이라 보류"는 제외 기준이 아니다 — 한 커밋으로 만들어 두면 아침에 revert로 버릴 수 있다.
 

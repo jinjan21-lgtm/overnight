@@ -38,7 +38,45 @@ process.stdin.on('end', () => {
   let owner = '';
   try { owner = fs.readFileSync(ownerFile, 'utf8').trim(); } catch {}
   if (input.hook_event_name === 'PostToolUse') {
-    if (me && wroteDeadline) fs.writeFileSync(ownerFile, me + '\n');
+    const cmd = String(ti.command || '');
+    if (me && wroteDeadline) { fs.writeFileSync(ownerFile, me + '\n'); owner = me; }
+
+    // A second overnight that splits off into .overnight-wt/<n> gets its own guarded run right away
+    // (parent's deadline as default; writing its own deadline later overrides it).
+    const wt = me && /\bworktree\s+add\b/.test(cmd) && cmd.match(/(\.overnight-wt[\\/][^\s"'&;|]+)/);
+    if (wt) {
+      const dir = path.resolve(cwd, wt[1]);
+      if (fs.existsSync(dir) && !fs.existsSync(path.join(dir, '.overnight', 'deadline'))) {
+        fs.mkdirSync(path.join(dir, '.overnight'), { recursive: true });
+        fs.copyFileSync(path.join(cwd, '.overnight', 'deadline'), path.join(dir, '.overnight', 'deadline'));
+        fs.writeFileSync(path.join(dir, '.overnight', 'owner'), me + '\n');
+      }
+    }
+
+    // Every commit by the owner goes into the repo-wide claim ledger, so parallel runs in one repo
+    // don't build the same thing twice. Other runs' entries come back as context.
+    if (me && owner === me && /\bgit\b[^|;&]*\bcommit\b/.test(cmd)) {
+      try {
+        const { execFileSync } = require('child_process');
+        const git = (...a) => execFileSync('git', ['-C', input.cwd || cwd, ...a], { encoding: 'utf8' }).trim();
+        const root = path.join(git('rev-parse', '--path-format=absolute', '--git-common-dir'), '..');
+        const claims = path.join(root, '.overnight', 'CLAIMS.md');
+        const branch = git('branch', '--show-current');
+        fs.mkdirSync(path.dirname(claims), { recursive: true });
+        fs.appendFileSync(claims, `${branch} | ${git('log', '-1', '--format=%s')} (커밋)\n`);
+        const others = fs.readFileSync(claims, 'utf8').split(/\r?\n/).filter((l) => l && !l.startsWith(branch + ' |'));
+        if (others.length) {
+          console.log(JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: 'PostToolUse',
+              additionalContext:
+                `같은 저장소의 다른 밤샘 세션이 이미 잡았거나 끝낸 일 (${claims}):\n${others.slice(-30).join('\n')}\n` +
+                '이 기능들은 표현이 달라도 줍지 마라. 내 REMAINING에서 [x] (다른 세션: <브랜치>)로 체크하고 다음 항목으로.',
+            },
+          }));
+        }
+      } catch {}
+    }
     process.exit(0);
   }
   if (!owner && me) { fs.writeFileSync(ownerFile, me + '\n'); owner = me; } // deadline written by hand

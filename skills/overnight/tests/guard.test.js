@@ -103,3 +103,50 @@ test('still guarded with seconds left (no rounding to zero)', () => {
   post(dir, 'A', { command: 'echo x > .overnight/deadline' });
   assert.ok(blocks(stop(dir, 'A')));
 });
+
+function repo(minutes = 60) {
+  const dir = lab(minutes);
+  const git = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+  return { dir, git };
+}
+const commit = (dir, git, sid, msg) => {
+  git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', msg);
+  return post(dir, sid, { command: `git commit -m "${msg}"` });
+};
+
+test('worktree split by a second session gets its own guarded run', () => {
+  const { dir, git } = repo();
+  post(dir, 'A', { command: 'echo x > .overnight/deadline' });
+  git('worktree', 'add', '-q', '.overnight-wt/2', '-b', 'overnight/x-2');
+  post(dir, 'B', { command: 'git worktree add .overnight-wt/2 -b overnight/x-2' });
+  const wt = path.join(dir, '.overnight-wt', '2');
+  assert.strictEqual(owner(wt), 'B');
+  assert.ok(blocks(stop(wt, 'B')));
+  assert.strictEqual(owner(dir), 'A');
+});
+
+test('commits go to the shared claim ledger; other runs see them, a lone run sees nothing', () => {
+  const { dir, git } = repo();
+  git('switch', '-q', '-c', 'overnight/x');
+  post(dir, 'A', { command: 'echo x > .overnight/deadline' });
+  assert.strictEqual(commit(dir, git, 'A', 'CSV 가져오기'), '');
+  git('worktree', 'add', '-q', '.overnight-wt/2', '-b', 'overnight/x-2');
+  post(dir, 'B', { command: 'git worktree add .overnight-wt/2 -b overnight/x-2' });
+  const wt = path.join(dir, '.overnight-wt', '2');
+  const wgit = (...a) => execFileSync('git', ['-C', wt, ...a], { encoding: 'utf8' });
+  const out = commit(wt, wgit, 'B', '반복 거래');
+  assert.match(out, /CSV 가져오기/);
+  assert.match(commit(dir, git, 'A', 'edit 명령'), /반복 거래/);
+  const ledger = fs.readFileSync(path.join(dir, '.overnight', 'CLAIMS.md'), 'utf8');
+  assert.match(ledger, /overnight\/x \| CSV 가져오기/);
+  assert.match(ledger, /overnight\/x-2 \| 반복 거래/);
+});
+
+test('a non-owner commit is not recorded', () => {
+  const { dir, git } = repo();
+  post(dir, 'A', { command: 'echo x > .overnight/deadline' });
+  commit(dir, git, 'B', 'peek fix');
+  assert.ok(!fs.existsSync(path.join(dir, '.overnight', 'CLAIMS.md')));
+});
