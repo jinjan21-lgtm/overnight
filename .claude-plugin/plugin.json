@@ -1,6 +1,6 @@
 {
   "name": "overnight",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "밤새 돌려놓은 세션이 '결정해주세요' 화면에서 멈추지 않게 하는 스킬 + Stop 가드 훅.",
   "author": { "name": "jinjan21" },
   "homepage": "https://github.com/jinjan21-lgtm/overnight",

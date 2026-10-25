@@ -10,9 +10,13 @@ const { execFileSync, spawn } = require('child_process');
 const GRACE_MS = 60 * 60000;      // after the deadline, wrap-up checks run this long
 const WRAPUP_MAX_BLOCKS = 4;      // then the session is let go no matter what
 const REVIEW_EVERY = 8;           // commits between fresh-eyes reviews
+const STALE_S = 900;              // watchdog.js default: quiet this long and the owner is gone
 
 const out = (o) => console.log(JSON.stringify(o));
 const readAt = (dir, ...p) => { try { return fs.readFileSync(path.join(dir, ...p), 'utf8'); } catch { return null; } };
+const mtime = (f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } };
+// git reports the repo root as a real path (/private/var/..) while cwd can arrive symlinked (/var/..).
+const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
 
 // The run lives in the nearest .overnight/ from cwd upward, so cd into a subfolder keeps it.
 function findRun(cwd) {
@@ -25,6 +29,29 @@ function findRun(cwd) {
 function deadlineOf(dir) {
   const d = new Date((readAt(dir, '.overnight', 'deadline') || '').trim());
   return isNaN(d) ? null : d;
+}
+
+// The window watchdog.js uses to call a session gone. The two must stay in step: the session the
+// watchdog relaunches takes the run over by rewriting the deadline, and a wider window here would
+// deny that relaunch and leave the run locked to a dead owner.
+function staleMs(dir) {
+  let cfg = {};
+  try { cfg = JSON.parse(readAt(dir, '.overnight', 'watchdog.json') || '{}'); } catch {}
+  const s = Number(cfg.stale);
+  return (s > 0 ? s : STALE_S) * 1000;
+}
+
+// Who else is mid-run in this folder: a live deadline, and an owner still writing heartbeats.
+// Rewriting such a run's deadline is not a handover — it strips that session's guard without telling
+// it, and the session then stops at its first text-only answer.
+function liveOwner(dir, me) {
+  const o = (readAt(dir, '.overnight', 'owner') || '').trim();
+  if (!o || o === me) return '';
+  const dl = deadlineOf(dir);
+  if (!dl || dl <= Date.now()) return '';
+  const ov = (f) => path.join(dir, '.overnight', f);
+  const beat = mtime(ov('heartbeat')) || mtime(ov('owner'));   // owner file: claimed, no hook event yet
+  return Date.now() - beat < staleMs(dir) ? o : '';
 }
 
 function gitIn(dir) {
@@ -125,13 +152,26 @@ function nonGoalListed(line, section) {
   });
 }
 
-// Other overnight runs in the same repo (root and .overnight-wt/*), excluding `run` itself.
+// Other overnight runs in the same repo, excluding `run` itself: any worktree of this repo is one,
+// wherever it was created, plus .overnight-wt/* folders git does not know as worktrees. Keyed by real
+// path so a run never counts itself (and a folder is not listed twice).
 function otherRuns(run) {
   let root;
   try { root = path.join(gitIn(run)('rev-parse', '--path-format=absolute', '--git-common-dir'), '..'); } catch { return []; }
-  const dirs = [path.resolve(root)];
-  try { for (const n of fs.readdirSync(path.join(root, '.overnight-wt'))) dirs.push(path.join(root, '.overnight-wt', n)); } catch {}
-  return dirs.filter((d) => path.resolve(d) !== path.resolve(run) && fs.existsSync(path.join(d, '.overnight', 'deadline')));
+  const dirs = new Map([[real(root), root]]);
+  try {
+    for (const l of gitIn(run)('worktree', 'list', '--porcelain').split(/\r?\n/)) {
+      if (l.startsWith('worktree ')) { const d = l.slice(9).trim(); dirs.set(real(d), d); }
+    }
+  } catch {}
+  try {
+    for (const n of fs.readdirSync(path.join(root, '.overnight-wt'))) {
+      const d = path.join(root, '.overnight-wt', n);
+      dirs.set(real(d), d);
+    }
+  } catch {}
+  dirs.delete(real(run));
+  return [...dirs.values()].filter((d) => fs.existsSync(path.join(d, '.overnight', 'deadline')));
 }
 
 const runEnded = (d) => { const dl = deadlineOf(d); return !dl || dl <= Date.now() || fs.existsSync(path.join(d, '.overnight', 'EXHAUSTED')); };
@@ -146,8 +186,8 @@ function wrapUpProblem(run) {
   const others = otherRuns(run);
   if (others.length && others.every(runEnded)) {
     const git = gitIn(run);
-    let branches = [];
-    try { branches = [run, ...others].map((d) => gitIn(d)('branch', '--show-current')).filter(Boolean); } catch {}
+    const branchOf = (d) => { try { return gitIn(d)('branch', '--show-current'); } catch { return ''; } };
+    const branches = [run, ...others].map(branchOf).filter(Boolean);   // one odd folder must not hide the rest
     let merged = '';
     try { merged = git('branch', '--list', '--format=%(refname:short)', 'overnight/*-merged').split(/\r?\n/)[0] || ''; } catch {}
     // A merged branch made early can miss commits a run made after it: every run's tip must be inside.
@@ -230,9 +270,11 @@ function registeredRun(me) {
 }
 
 function claim(dir, me) {
+  if (liveOwner(dir, me)) return false;   // backstop: a live run is never taken over
   fs.writeFileSync(path.join(dir, '.overnight', 'owner'), me + '\n');
   try { fs.mkdirSync(SESSIONS, { recursive: true }); fs.writeFileSync(sessionFile(me), path.resolve(dir)); } catch {}
   startWatchdog(dir);
+  return true;
 }
 
 // git-bash paths (/c/Users/..) to native ones.
@@ -280,6 +322,26 @@ process.stdin.on('end', () => {
   const ti = input.tool_input || {};
   const cmd = String(ti.command || '');
   const base = baseDir(input, cmd);
+
+  // Two overnights started in the same folder in the same minute both see "no deadline" and both
+  // write one. Send the second one into its own worktree instead of letting it take the first's run.
+  if (ev === 'PreToolUse' && me && !notifyGate && !registeredRun(me)) {
+    const dl = deadlineTarget(ti, cmd, base);
+    if (dl && liveOwner(dl, me)) {
+      out({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            `${dl} 는 다른 세션이 지금 밤샘 중인 폴더다(.overnight/owner 의 heartbeat가 살아 있다). ` +
+            'deadline을 다시 쓰면 그 세션의 가드가 조용히 풀려 첫 텍스트 응답에서 멈춘다. ' +
+            '`git worktree add .overnight-wt/<n> -b overnight/<시작일>-<n>` 로 갈라져 그 폴더에서 내 마감을 써라 ' +
+            '(앞 세션이 죽어 조용해지면 그때는 이어받을 수 있다).',
+        },
+      });
+      process.exit(0);
+    }
+  }
 
   // Ownership is claimed after the write, on the folder whose .overnight/deadline was actually written
   // (a second overnight may write its worktree's deadline while its shell still sits in the repo root).

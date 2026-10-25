@@ -104,3 +104,15 @@ RED-4 합리화 원문:
 - 재시작 세션 출력 파일이 0바이트(stdout 미수집). 같은 시각 다른 세션이 watchdog의 Windows `detached`를 꺼서(새 콘솔 창 방지) 바꿈 — 출력 수집은 재검증 안 함
 
 교훈: 실제 프로젝트·장시간에서만 나온 버그가 4개(셸 위치 ≠ 실행, git 범위 오탐, 보조 worktree 채택, 이른 병합). 모두 "모델이 예상과 다른 경로로 움직일 때" 생김 — 훅은 모델의 위치·순서를 가정하면 안 된다.
+
+## 병렬 세션 점검 (2026-10-25) — 3건 수정, 단위 테스트 33개
+
+다인용이 아니라 **한 사람이 같은 저장소에 밤샘 여러 개**를 띄우는 경우를 처음부터 다시 훑었다. 세션별 잠금·등록부, 남의 `.overnight/` 쓰기 거부, worktree 자동 분리·상속, 찜 장부, 알림 게이트, run당 watchdog 하나는 모두 제대로 돌았다. 드러난 구멍 셋:
+
+| 구멍 | 왜 문제인가 | 수정 | RED 시험 |
+|---|---|---|---|
+| **살아 있는 실행을 뺏김.** `claim()`이 owner를 조건 없이 덮어씀 — 같은 폴더에서 두 세션이 같은 시각에 출발하면(둘 다 "deadline 없음"을 보고 각자 씀) 나중에 쓴 쪽이 주인이 된다 | 먼저 쓴 세션이 **조용히 잠금을 잃고** 첫 텍스트 응답에서 멈춘다 — 이 스킬이 막으려는 단 하나의 실패 | heartbeat(없으면 owner 파일) 가 15분 안이고 마감 전이면 `deadline` 쓰기를 **PreToolUse에서 거부**(worktree로 갈라지라는 안내와 함께), `claim()`도 덮어쓰기 거부. 이어받기는 조용해진 뒤에만 | `a live owner is not stolen`, `the owner may rewrite its own deadline`, `an unowned or finished run is free to take` |
+| 인수 기준이 watchdog와 따로 놀 수 있음 | 훅의 창이 watchdog보다 넓으면 watchdog가 띄운 세션이 인수를 거부당해 실행이 죽은 주인에게 잠긴다 | 훅도 `.overnight/watchdog.json` 의 `stale`을 읽어 두 기준이 같은 값을 쓰게 함(기본 900초) | `the takeover window follows watchdog.json stale` |
+| **`.overnight-wt/` 밖 worktree가 안 보임.** `otherRuns()`가 본 폴더와 `.overnight-wt/*`만 훑음 | 다른 경로에 만든 worktree의 브랜치가 통합 차례에서 조용히 빠진다 — 아침에 아무도 안 보는 브랜치 | `git worktree list --porcelain` 로 저장소의 모든 worktree를 포함. 경로 비교는 realpath로(심링크된 cwd에서 **실행이 자기를 남의 실행으로 세던** 버그도 같이 해소) | `a worktree outside .overnight-wt is still a parallel run at wrap-up` |
+
+끝까지 재현한 시나리오(두 실행 + 분리 + 공용 장부 + 동시 종료): 세 세션이 모두 통합 지시를 받지만 먼저 만든 통합본이 모든 tip을 담으면 나머지는 자동으로 풀리고, 통합 뒤 커밋이 생기면 다시 막는다 — 중복 통합이 손해로 이어지지 않는다(`WRAPUP_MAX_BLOCKS` 4로 교착도 없음).

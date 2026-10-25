@@ -23,6 +23,15 @@ const owner = (dir) => { try { return fs.readFileSync(path.join(dir, '.overnight
 const stop = (dir, sid) => run({ hook_event_name: 'Stop', cwd: dir, session_id: sid });
 const ask = (dir, sid) => run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', cwd: dir, session_id: sid, tool_input: {} });
 const post = (dir, sid, tool_input) => run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', cwd: dir, session_id: sid, tool_input });
+const pre = (dir, sid, tool_input, tool_name = 'Bash') => run({ hook_event_name: 'PreToolUse', tool_name, cwd: dir, session_id: sid, tool_input });
+// The owner looks dead to the hook once its heartbeat is older than the watchdog's stale window.
+const goQuiet = (dir, minutes = 20) => {
+  const t = (Date.now() - minutes * 60000) / 1000;
+  for (const f of ['heartbeat', 'owner']) {
+    const p = path.join(dir, '.overnight', f);
+    if (fs.existsSync(p)) fs.utimesSync(p, t, t);
+  }
+};
 
 test('no deadline file -> no-op', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ovn-'));
@@ -59,10 +68,55 @@ test('reading the deadline does not steal the run', () => {
 test('rewriting the deadline (resume after a crash) takes over', () => {
   const dir = lab();
   post(dir, 'A', { command: 'echo x > .overnight/deadline' });
-  run({ hook_event_name: 'PostToolUse', tool_name: 'Write', cwd: dir, session_id: 'C', tool_input: { file_path: path.join(dir, '.overnight', 'deadline') } });
+  goQuiet(dir); // A crashed: that is what makes the run free to take
+  const w = { file_path: path.join(dir, '.overnight', 'deadline') };
+  assert.strictEqual(pre(dir, 'C', w, 'Write'), '');
+  run({ hook_event_name: 'PostToolUse', tool_name: 'Write', cwd: dir, session_id: 'C', tool_input: w });
   assert.strictEqual(owner(dir), 'C');
   assert.ok(blocks(stop(dir, 'C')));
   assert.strictEqual(stop(dir, 'A'), '');
+});
+
+// Two sessions started in the same folder at the same second both see "no deadline" and both write one.
+// Last writer wins would strip the first one's guard without telling it — it then stops at the first
+// text-only answer, which is the one failure this skill exists to prevent.
+test('a live owner is not stolen: the deadline write is denied, ownership stays', () => {
+  const dir = lab();
+  post(dir, 'A', { command: 'echo x > .overnight/deadline' });
+  const w = { file_path: path.join(dir, '.overnight', 'deadline') };
+  assert.match(pre(dir, 'B', w, 'Write'), /deny/);
+  assert.match(pre(dir, 'B', w, 'Write'), /worktree/);        // tells B what to do instead
+  assert.match(pre(dir, 'B', { command: 'echo x > .overnight/deadline' }), /deny/);
+  run({ hook_event_name: 'PostToolUse', tool_name: 'Write', cwd: dir, session_id: 'B', tool_input: w });
+  assert.strictEqual(owner(dir), 'A');                        // and claim refuses even if a write slips through
+  assert.ok(blocks(stop(dir, 'A')));                          // A keeps its guard
+  assert.strictEqual(stop(dir, 'B'), '');
+});
+
+test('the owner may rewrite its own deadline', () => {
+  const dir = lab();
+  post(dir, 'A', { command: 'echo x > .overnight/deadline' });
+  assert.strictEqual(pre(dir, 'A', { command: 'echo y > .overnight/deadline' }), '');
+  assert.strictEqual(pre(dir, 'A', { file_path: path.join(dir, '.overnight', 'deadline') }, 'Write'), '');
+});
+
+test('an unowned or finished run is free to take', () => {
+  const dir = lab();
+  assert.strictEqual(pre(dir, 'A', { command: 'echo x > .overnight/deadline' }), '');  // nobody owns it yet
+  post(dir, 'A', { command: 'echo x > .overnight/deadline' });
+  setDeadline(dir, -1);
+  assert.strictEqual(pre(dir, 'B', { command: 'echo x > .overnight/deadline' }), '');  // last night's run is over
+});
+
+// The watchdog relaunches a quiet owner; the relaunched session takes over by rewriting the deadline.
+// If the hook's window were wider than the watchdog's, that relaunch would be denied and the run stuck.
+test('the takeover window follows watchdog.json stale', () => {
+  const dir = lab();
+  post(dir, 'A', { command: 'echo x > .overnight/deadline' });
+  goQuiet(dir, 0.2);                                          // 12s quiet
+  assert.match(pre(dir, 'B', { command: 'echo x > .overnight/deadline' }), /deny/);
+  fs.writeFileSync(path.join(dir, '.overnight', 'watchdog.json'), JSON.stringify({ stale: 1 }));
+  assert.strictEqual(pre(dir, 'B', { command: 'echo x > .overnight/deadline' }), '');
 });
 
 test('deadline written by hand: first session to hit the hook owns it', () => {
@@ -241,6 +295,21 @@ test('last of two runs to finish is told to make the merged branch', () => {
   git('-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '-q', '--no-ff', '-m', 'm', 'overnight/x-2');
   git('switch', '-q', 'overnight/x');
   assert.strictEqual(stop(dir, 'A'), '');
+});
+
+// A parallel run does not have to sit in .overnight-wt/: any worktree of this repo is one, and a
+// branch left out of the merge turn is a branch nobody looks at in the morning.
+test('a worktree outside .overnight-wt is still a parallel run at wrap-up', () => {
+  const { dir, git } = repo();
+  git('switch', '-q', '-c', 'overnight/x');
+  post(dir, 'A', { command: 'echo x > .overnight/deadline' });
+  const far = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ovn-far-')), 'wt');
+  git('worktree', 'add', '-q', far, '-b', 'overnight/far');
+  fs.mkdirSync(path.join(far, '.overnight'), { recursive: true });
+  setDeadline(far, -1);
+  setDeadline(dir, -1);
+  write(dir, '.overnight/MORNING.md', 'ok');
+  assert.match(stop(dir, 'A'), /overnight\/far.*merge --no-ff/);
 });
 
 test('token budget reached: stop allowed once wrapped up', () => {

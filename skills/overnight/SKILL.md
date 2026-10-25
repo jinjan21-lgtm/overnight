@@ -22,7 +22,8 @@ user-invocable: true
 
 `.overnight/deadline`이 이미 있고 마감 전이면 `.overnight/heartbeat`(주인 세션의 훅이 도구 호출마다 갱신) 수정 시각부터 본다:
 - **15분 안 → 다른 세션이 지금 밤샘 중.** 이 폴더에서 일하지 않는다. `git worktree add .overnight-wt/<n> -b overnight/<시작일>-<n>`(`.overnight-wt/`는 `.git/info/exclude`에), 그 폴더로 `cd`해서 아래 "새로 시작"을 한다(훅이 worktree에 앞 세션 마감을 기본값으로 깔아 두지만, 내 마감을 다시 써야 한다). 다른 세션의 브랜치로 rebase·merge하지 않는다 — 두 브랜치 합치기는 `아침에 할 일`로.
-- **오래됨(또는 watchdog가 띄운 세션) → 이어받기.** 앞 세션이 죽은 것이다. deadline 값을 그대로 다시 써서(`echo <같은 값> > .overnight/deadline`) 잠금을 넘겨받고, LOG.md·DECISIONS.md를 읽고 마지막 항목부터 계속한다.
+  - 훅도 같이 막는다: 살아 있는 실행의 `deadline`을 다시 쓰려 하면 **거부**한다(그 세션의 잠금이 조용히 풀려 첫 텍스트 응답에서 멈추기 때문). 거부 메시지대로 worktree로 갈라져라.
+- **오래됨(또는 watchdog가 띄운 세션) → 이어받기.** 앞 세션이 죽은 것이다. deadline 값을 그대로 다시 써서(`echo <같은 값> > .overnight/deadline`) 잠금을 넘겨받고, LOG.md·DECISIONS.md를 읽고 마지막 항목부터 계속한다. 조용해진 뒤에만 넘어온다 — 기준은 watchdog 재시작과 같은 15분(`.overnight/watchdog.json`의 `stale`을 바꾸면 양쪽이 같이 움직인다).
 
 마감이 지났거나 없으면 **새로 시작** (첫 3분):
 1. 마감 계산 → `.overnight/deadline`에 ISO 시각 한 줄(`echo` 리다이렉트나 Write 도구로 — 이 쓰기가 잠금을 이 세션에 건다). 기준은 사용자 메시지를 받은 시각.
@@ -134,7 +135,7 @@ PLAN·REMAINING이 없는 프로젝트면 첫 재기획 때 골에서 출발해 
 
 마감에 도달했거나, EXHAUSTED를 썼거나, 토큰 상한에 닿았을 때만 멈춘다. 그때 아침 보고를 **`.overnight/MORNING.md`에 쓰고** 같은 내용을 채팅에 한 번 낸다(채팅만 쓰면 창을 닫을 때 사라진다 — 훅이 MORNING.md 없이는 못 멈추게 한다). 결정 목록은 DECISIONS.md에서, 확인할 커밋은 FLAGS.md에서 옮긴다.
 
-**같은 저장소에 다른 밤샘이 있었고 모두 끝났으면**, 마지막에 끝나는 세션이 통합 브랜치를 만든다: 내 브랜치에서 `git switch -c <내 브랜치>-merged` → 다른 브랜치를 `git merge --no-ff` → 충돌 해결 → 전체 테스트. 원래 브랜치는 건드리지 않는다. 못 풀면 `git merge --abort` 후 `.overnight/MERGE.md`에 이유. 훅이 이 차례를 알려 준다.
+**같은 저장소에 다른 밤샘이 있었고 모두 끝났으면**(`.overnight-wt/` 밖에 만든 worktree도 센다), 마지막에 끝나는 세션이 통합 브랜치를 만든다: 내 브랜치에서 `git switch -c <내 브랜치>-merged` → 다른 브랜치를 `git merge --no-ff` → 충돌 해결 → 전체 테스트. 원래 브랜치는 건드리지 않는다. 못 풀면 `git merge --abort` 후 `.overnight/MERGE.md`에 이유. 훅이 이 차례를 알려 준다.
 
 ```
 ## 밤샘 결과 (23:00 → 09:00)
