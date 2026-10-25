@@ -1,5 +1,5 @@
 {
-  "description": "overnight guard: .overnight/deadline 을 쓴 세션에 한해, 마감 전 Stop 차단, AskUserQuestion 거부, stdin 대기 명령 차단",
+  "description": "overnight guard: .overnight/deadline 을 쓴 세션에 한해 마감 전 Stop 차단, 질문·stdin 대기 명령 거부, 커밋 찜 장부, 마무리 검사, watchdog 재시작",
   "hooks": {
     "Stop": [
       {
@@ -13,7 +13,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "AskUserQuestion|Bash",
+        "matcher": "AskUserQuestion|Bash|Write|Edit",
         "hooks": [
           {
             "type": "command",
@@ -24,7 +24,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|Write",
+        "matcher": "Bash|Write|Edit",
         "hooks": [
           {
             "type": "command",

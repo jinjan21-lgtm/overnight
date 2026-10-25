@@ -35,6 +35,13 @@ Claude Code 스킬 + Stop 가드 훅. "밤새 돌려", "10시간 돌려, 자고 
 - `.overnight/deadline`이 미래인 동안 Stop을 막고 AskUserQuestion을 거부한다
 - 출구는 하나: `.overnight/EXHAUSTED` + 파일 흔적 검사 (재기획 3회 이상, 마지막 후보 5개 이상, 제외 사유는 비목표·비가역뿐, REMAINING 열린 항목 0). 공회전과 조기 종료를 둘 다 막는다
 - `python -`처럼 stdin을 기다리며 멈출 Bash 명령을 거부한다
+- 마무리 검사: 멈추기 전에 아침 보고를 `.overnight/MORNING.md` 파일로 남겨야 한다. 같은 저장소의 밤샘이 모두 끝났으면 마지막 세션이 `<브랜치>-merged` 통합 브랜치를 만들어 충돌까지 풀어 둔다
+- 커밋 직후 알림: 테스트 기댓값만 고친 커밋은 `.overnight/FLAGS.md`에 기록, 문서만 바꾼 커밋 경고, 8커밋마다 새 서브에이전트 리뷰 차례
+- `제외(비목표)`가 PLAN 비목표 섹션에 실제로 있는지 대조한다
+- 토큰 상한(선택): `.overnight/budget`에 출력 토큰 수를 적으면 닿을 때 마무리 후 멈춘다
+
+**watchdog (재시작)**
+- 세션이 잠금을 잡는 순간 훅이 `watchdog.js`를 띄운다. 주인 세션이 15분 넘게 조용하면(크래시, 사용량 한도, 연결 끊김) `claude -p "/overnight 이어서 ..."`로 다시 띄운다. 한도가 아직 안 풀렸으면 다음 확인 때 다시 시도한다
 - deadline 파일이 없으면 아무것도 안 한다. 평소 세션에는 영향 없음
 - 잠금은 deadline을 **쓴 세션**에만 걸린다(`.overnight/owner`). 밤샘 중에 같은 폴더에서 다른 세션을 열어도 그 세션은 평소처럼 동작한다. 같은 저장소에서 밤샘을 하나 더 시작하면 `git worktree`로 폴더를 나눠 따로 돌고, 커밋이 저장소 공용 `.overnight/CLAIMS.md`에 자동 기록돼 서로 같은 기능을 피한다. 두 브랜치 병합(공유 파일 충돌 해결 포함)은 아침 할 일로 남는다
 
@@ -67,13 +74,18 @@ Claude Code 스킬 + Stop 가드 훅. "밤새 돌려", "10시간 돌려, 자고 
 {
   "hooks": {
     "Stop": [{ "hooks": [{ "type": "command", "command": "node \"<경로>/skills/overnight/hooks/guard.js\"" }] }],
-    "PreToolUse": [{ "matcher": "AskUserQuestion|Bash", "hooks": [{ "type": "command", "command": "node \"<경로>/skills/overnight/hooks/guard.js\"" }] }],
-    "PostToolUse": [{ "matcher": "Bash|Write", "hooks": [{ "type": "command", "command": "node \"<경로>/skills/overnight/hooks/guard.js\"" }] }]
+    "PreToolUse": [{ "matcher": "AskUserQuestion|Bash|Write|Edit", "hooks": [{ "type": "command", "command": "node \"<경로>/skills/overnight/hooks/guard.js\"" }] }],
+    "PostToolUse": [{ "matcher": "Bash|Write|Edit", "hooks": [{ "type": "command", "command": "node \"<경로>/skills/overnight/hooks/guard.js\"" }] }]
   }
 }
 ```
 
 Node.js가 필요하다.
+
+이미 "작업 완료" 알림창 같은 Stop 훅을 쓰고 있다면, 밤샘 중 차단될 때마다 창이 뜨지 않게 앞에 게이트를 붙인다:
+```
+node "<경로>/skills/overnight/hooks/guard.js" --notify-ok && <기존 알림 명령>
+```
 
 ## 검증
 
@@ -87,6 +99,7 @@ writing-skills의 RED → GREEN → REFACTOR, 그리고 `claude -p` 실전 실�
 | 실전 2 (출구 추가) | 7턴 만에 EXHAUSTED 쓰고 정상 종료 |
 | 실전 3 (스킬+훅, 백로그 3개) | 골 + 백로그 3개 전부 처리, 결정 3건 기록, 커밋 4개 |
 | 실전 9~12 (같은 저장소에 세션 3개 동시, 4회) | 평소 세션은 잠기지 않고 즉시 종료. 두 번째 밤샘은 worktree로 갈라짐. 중복 작업은 문서 규칙으로는 안 막혀서 훅이 커밋을 찜 장부에 자동 기록·상대에게 알림 → 기능이 두 갈래로 나뉘고 겹친 1건은 스스로 revert |
+| 장시간 (실제 프로젝트 사본, 2시간, 밤샘 2개 + 크래시) | 세션이 실제로 죽었고 watchdog가 10분 뒤 재시작, 이어받아 끝까지. 두 밤샘 커밋 54개, 통합 브랜치 테스트 259개 통과. 실전에서만 나온 버그 4개 수정 |
 | 실전 4~8 (기획·개발 반복, 인수인계 연계, 25분 × 5회) | 재기획 없음 → 5회, 커밋 6 → 20. 모델 판단 출구는 매번 다른 합리화로 뚫려서, 출구를 파일 흔적(재기획 회차·후보·제외 사유·REMAINING 체크)으로만 열도록 바꿈 |
 
 전체 기록: [skills/overnight/tests/tdd-record.md](skills/overnight/tests/tdd-record.md)
@@ -103,7 +116,8 @@ writing-skills의 RED → GREEN → REFACTOR, 그리고 `claude -p` 실전 실�
 hooks/hooks.json      플러그인용 훅 등록
 skills/overnight/
   SKILL.md
-  hooks/guard.js      Stop / AskUserQuestion / Bash 가드, 세션 소유권
+  hooks/guard.js      Stop / AskUserQuestion / Bash 가드, 세션 소유권, 찜 장부, 마무리 검사
+  hooks/watchdog.js   조용해진 세션 재시작
   tests/guard.test.js 훅 단위 테스트 (node --test)
   tests/tdd-record.md
 ```
